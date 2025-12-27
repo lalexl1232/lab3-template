@@ -75,76 +75,85 @@ async def create_rental(
     rental_request: CreateRentalRequest,
     x_user_name: str = Header(..., alias="X-User-Name")
 ):
-    async with httpx.AsyncClient() as client:
-        # Get car details
-        car_response = await client.get(
-            f"{CARS_SERVICE_URL}/api/v1/cars/{rental_request.car_uid}"
-        )
-        if car_response.status_code != 200:
-            raise HTTPException(status_code=404, detail="Car not found")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Get car details
+            car_response = await client.get(
+                f"{CARS_SERVICE_URL}/api/v1/cars/{rental_request.car_uid}"
+            )
+            if car_response.status_code != 200:
+                raise HTTPException(status_code=404, detail="Car not found")
 
-        car_data = car_response.json()
+            car_data = car_response.json()
 
-        # Calculate rental price
-        date_from = datetime.fromisoformat(rental_request.date_from)
-        date_to = datetime.fromisoformat(rental_request.date_to)
-        days = abs((date_to - date_from).days)
-        total_price = days * car_data["price"]
+            # Calculate rental price
+            date_from = datetime.fromisoformat(rental_request.date_from)
+            date_to = datetime.fromisoformat(rental_request.date_to)
+            days = abs((date_to - date_from).days)
+            total_price = days * car_data["price"]
 
-        # Create payment
-        payment_response = await client.post(
-            f"{PAYMENT_SERVICE_URL}/api/v1/payment",
-            json={"price": total_price}
-        )
-        if payment_response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Payment service error")
+            # Create payment
+            payment_response = await client.post(
+                f"{PAYMENT_SERVICE_URL}/api/v1/payment",
+                json={"price": total_price}
+            )
+            if payment_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Payment service error")
 
-        payment_data = payment_response.json()
+            payment_data = payment_response.json()
 
-        # Reserve car
-        reserve_response = await client.patch(
-            f"{CARS_SERVICE_URL}/api/v1/cars/{rental_request.car_uid}/availability",
-            params={"available": False}
-        )
-        if reserve_response.status_code != 200:
-            # Rollback payment
-            await client.delete(f"{PAYMENT_SERVICE_URL}/api/v1/payment/{payment_data['paymentUid']}")
-            raise HTTPException(status_code=500, detail="Failed to reserve car")
-
-        # Create rental
-        rental_response = await client.post(
-            f"{RENTAL_SERVICE_URL}/api/v1/rental",
-            json={
-                "username": x_user_name,
-                "paymentUid": payment_data["paymentUid"],
-                "carUid": str(rental_request.car_uid),
-                "dateFrom": rental_request.date_from,
-                "dateTo": rental_request.date_to
-            }
-        )
-        if rental_response.status_code != 200:
-            # Rollback car availability and payment
-            await client.patch(
+            # Reserve car
+            reserve_response = await client.patch(
                 f"{CARS_SERVICE_URL}/api/v1/cars/{rental_request.car_uid}/availability",
-                params={"available": True}
+                params={"available": False}
             )
-            await client.delete(f"{PAYMENT_SERVICE_URL}/api/v1/payment/{payment_data['paymentUid']}")
-            raise HTTPException(status_code=500, detail="Rental service error")
+            if reserve_response.status_code != 200:
+                # Rollback payment
+                await client.delete(f"{PAYMENT_SERVICE_URL}/api/v1/payment/{payment_data['paymentUid']}")
+                raise HTTPException(status_code=500, detail="Failed to reserve car")
 
-        rental_data = rental_response.json()
-
-        return CreateRentalResponse(
-            rental_uid=rental_data["rentalUid"],
-            status=rental_data["status"],
-            car_uid=rental_request.car_uid,
-            date_from=rental_request.date_from,
-            date_to=rental_request.date_to,
-            payment=PaymentInfo(
-                payment_uid=payment_data["paymentUid"],
-                status=payment_data["status"],
-                price=payment_data["price"]
+            # Create rental
+            rental_response = await client.post(
+                f"{RENTAL_SERVICE_URL}/api/v1/rental",
+                json={
+                    "username": x_user_name,
+                    "paymentUid": payment_data["paymentUid"],
+                    "carUid": str(rental_request.car_uid),
+                    "dateFrom": rental_request.date_from,
+                    "dateTo": rental_request.date_to
+                }
             )
-        )
+            if rental_response.status_code != 200:
+                # Rollback car availability and payment
+                await client.patch(
+                    f"{CARS_SERVICE_URL}/api/v1/cars/{rental_request.car_uid}/availability",
+                    params={"available": True}
+                )
+                await client.delete(f"{PAYMENT_SERVICE_URL}/api/v1/payment/{payment_data['paymentUid']}")
+                raise HTTPException(status_code=500, detail="Rental service error")
+
+            rental_data = rental_response.json()
+
+            return CreateRentalResponse(
+                rental_uid=rental_data["rentalUid"],
+                status=rental_data["status"],
+                car_uid=rental_request.car_uid,
+                date_from=rental_request.date_from,
+                date_to=rental_request.date_to,
+                payment=PaymentInfo(
+                    payment_uid=payment_data["paymentUid"],
+                    status=payment_data["status"],
+                    price=payment_data["price"]
+                )
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Service unavailable: {str(e)}")
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/api/v1/rental", response_model=List[RentalResponse])
