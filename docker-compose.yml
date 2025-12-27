@@ -13,8 +13,75 @@ services:
       - ./postgres/:/docker-entrypoint-initdb.d/
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-# TODO добавить сервисы
+  payment:
+    build:
+      context: ./services/payment_service
+      dockerfile: Dockerfile
+    container_name: payment
+    restart: on-failure
+    environment:
+      DATABASE_URL: postgresql://program:test@postgres:5432/payments
+    ports:
+      - "8050:8050"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rental:
+    build:
+      context: ./services/rental_service
+      dockerfile: Dockerfile
+    container_name: rental
+    restart: on-failure
+    environment:
+      DATABASE_URL: postgresql://program:test@postgres:5432/rentals
+    ports:
+      - "8060:8060"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  cars:
+    build:
+      context: ./services/cars_service
+      dockerfile: Dockerfile
+    container_name: cars
+    restart: on-failure
+    environment:
+      DATABASE_URL: postgresql://program:test@postgres:5432/cars
+    ports:
+      - "8070:8070"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ./services/gateway_service
+      dockerfile: Dockerfile
+    container_name: gateway
+    restart: on-failure
+    environment:
+      CARS_SERVICE_URL: http://cars:8070
+      RENTAL_SERVICE_URL: http://rental:8060
+      PAYMENT_SERVICE_URL: http://payment:8050
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      payment:
+        condition: service_started
+      rental:
+        condition: service_started
+      cars:
+        condition: service_started
 
 volumes:
   db-data:
