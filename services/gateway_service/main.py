@@ -25,6 +25,10 @@ PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment:8050")
 
 circuit_breaker_manager = CircuitBreakerManager()
 
+# In-memory cache for car information
+# Key: carUid, Value: dict with car details
+car_info_cache = {}
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -41,6 +45,11 @@ async def shutdown_event():
 @app.get("/manage/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/manage/cache")
+def cache_status():
+    return {"car_cache": car_info_cache}
 
 
 @app.get("/api/v1/cars", response_model=PaginationResponse)
@@ -98,6 +107,14 @@ async def create_rental(
                 raise HTTPException(status_code=404, detail="Car not found")
 
             car_data = car_response.json()
+
+            # Cache car information for future fallback
+            car_info_cache[str(rental_request.car_uid)] = {
+                "carUid": car_data.get("carUid"),
+                "brand": car_data.get("brand", ""),
+                "model": car_data.get("model", ""),
+                "registrationNumber": car_data.get("registrationNumber", "")
+            }
 
             # Calculate rental price
             date_from = datetime.fromisoformat(rental_request.date_from)
@@ -199,10 +216,23 @@ async def get_user_rentals(x_user_name: str = Header(..., alias="X-User-Name")):
                     f"{CARS_SERVICE_URL}/api/v1/cars/{rental['carUid']}"
                 )
                 if car_response.status_code == 200:
-                    return car_response.json()
-                return {}
+                    car_data = car_response.json()
+                    # Cache car information
+                    car_info_cache[rental["carUid"]] = {
+                        "carUid": car_data.get("carUid"),
+                        "brand": car_data.get("brand", ""),
+                        "model": car_data.get("model", ""),
+                        "registrationNumber": car_data.get("registrationNumber", "")
+                    }
+                    logger.info(f"Cached car info for {rental['carUid']}: {car_data.get('brand')} {car_data.get('model')}")
+                    return car_data
+                raise Exception(f"Failed to fetch car data: {car_response.status_code}")
 
         def car_fallback():
+            # Try to get cached car info
+            cached_car = car_info_cache.get(rental["carUid"])
+            if cached_car:
+                return cached_car
             return {"carUid": rental["carUid"], "brand": "", "model": "", "registrationNumber": ""}
 
         car_breaker = circuit_breaker_manager.get_breaker("cars_service")
@@ -267,35 +297,63 @@ async def get_rental(
 
     # Get car info with fallback
     async def fetch_car():
+        logger.info(f"Attempting to fetch car data for carUid: {rental['carUid']}")
         async with httpx.AsyncClient(timeout=5.0) as client:
             car_response = await client.get(
                 f"{CARS_SERVICE_URL}/api/v1/cars/{rental['carUid']}"
             )
+            logger.info(f"Car service response status: {car_response.status_code}")
             if car_response.status_code == 200:
-                return car_response.json()
-            return {}
+                car_data = car_response.json()
+                # Cache car information
+                car_info_cache[rental["carUid"]] = {
+                    "carUid": car_data.get("carUid"),
+                    "brand": car_data.get("brand", ""),
+                    "model": car_data.get("model", ""),
+                    "registrationNumber": car_data.get("registrationNumber", "")
+                }
+                logger.info(f"Cached car info for {rental['carUid']}: {car_data.get('brand')} {car_data.get('model')}")
+                return car_data
+            raise Exception(f"Failed to fetch car data: {car_response.status_code}")
 
     def car_fallback():
+        logger.info(f"Car fallback called for rental carUid: {rental['carUid']}")
+        logger.info(f"Current cache state: {car_info_cache}")
+        # Try to get cached car info
+        cached_car = car_info_cache.get(rental["carUid"])
+        if cached_car:
+            logger.info(f"Returning cached car data: {cached_car}")
+            return cached_car
+        logger.warning(f"No cached data found, returning empty car data")
         return {"carUid": rental["carUid"], "brand": "", "model": "", "registrationNumber": ""}
 
     car_breaker = circuit_breaker_manager.get_breaker("cars_service")
+    logger.info(f"Circuit breaker state before call: {car_breaker.get_state()}")
     car_data = await car_breaker.call(fetch_car, fallback=car_fallback)
+    logger.info(f"Received car_data: {car_data}")
 
     # Get payment info with fallback
     async def fetch_payment():
+        logger.info(f"Attempting to fetch payment data for paymentUid: {rental['paymentUid']}")
         async with httpx.AsyncClient(timeout=5.0) as client:
             payment_response = await client.get(
                 f"{PAYMENT_SERVICE_URL}/api/v1/payment/{rental['paymentUid']}"
             )
+            logger.info(f"Payment service response status: {payment_response.status_code}")
             if payment_response.status_code == 200:
-                return payment_response.json()
+                payment_data = payment_response.json()
+                logger.info(f"Payment data from service: {payment_data}")
+                return payment_data
             return {}
 
     def payment_fallback():
+        logger.info(f"Payment fallback called for paymentUid: {rental['paymentUid']}")
         return {"paymentUid": rental["paymentUid"], "status": "PAID", "price": 0}
 
     payment_breaker = circuit_breaker_manager.get_breaker("payment_service")
+    logger.info(f"Payment circuit breaker state: {payment_breaker.get_state()}")
     payment_data = await payment_breaker.call(fetch_payment, fallback=payment_fallback)
+    logger.info(f"Received payment_data: {payment_data}")
 
     return RentalResponse(
         rental_uid=rental["rentalUid"],
