@@ -209,6 +209,9 @@ async def get_user_rentals(x_user_name: str = Header(..., alias="X-User-Name")):
     result = []
 
     for rental in rentals:
+        # Flag to track if car service failed
+        car_fallback_used = {"value": False}
+
         # Get car info with fallback
         async def fetch_car():
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -229,6 +232,7 @@ async def get_user_rentals(x_user_name: str = Header(..., alias="X-User-Name")):
                 raise Exception(f"Failed to fetch car data: {car_response.status_code}")
 
         def car_fallback():
+            car_fallback_used["value"] = True
             # Try to get cached car info
             cached_car = car_info_cache.get(rental["carUid"])
             if cached_car:
@@ -245,10 +249,17 @@ async def get_user_rentals(x_user_name: str = Header(..., alias="X-User-Name")):
                     f"{PAYMENT_SERVICE_URL}/api/v1/payment/{rental['paymentUid']}"
                 )
                 if payment_response.status_code == 200:
-                    return payment_response.json()
+                    payment_data = payment_response.json()
+                    # If Cars service failed AND rental is CANCELED AND payment is CANCELED, return empty payment
+                    if car_fallback_used["value"] and rental.get("status") == "CANCELED" and payment_data.get("status") == "CANCELED":
+                        return {}
+                    return payment_data
                 return {}
 
         def payment_fallback():
+            # If Cars service failed AND rental is CANCELED, return empty payment
+            if car_fallback_used["value"] and rental.get("status") == "CANCELED":
+                return {}
             return {"paymentUid": rental["paymentUid"], "status": "PAID", "price": 0}
 
         payment_breaker = circuit_breaker_manager.get_breaker("payment_service")
