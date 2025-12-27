@@ -265,23 +265,39 @@ async def get_user_rentals(x_user_name: str = Header(..., alias="X-User-Name")):
         payment_breaker = circuit_breaker_manager.get_breaker("payment_service")
         payment_data = await payment_breaker.call(fetch_payment, fallback=payment_fallback)
 
-        result.append(RentalResponse(
-            rental_uid=rental["rentalUid"],
-            status=rental["status"],
-            date_from=rental["dateFrom"],
-            date_to=rental["dateTo"],
-            car=CarInfo(
-                car_uid=car_data.get("carUid", rental["carUid"]),
-                brand=car_data.get("brand", ""),
-                model=car_data.get("model", ""),
-                registration_number=car_data.get("registrationNumber", "")
-            ),
-            payment=PaymentInfo(
-                payment_uid=payment_data.get("paymentUid", rental["paymentUid"]),
-                status=payment_data.get("status", "PAID"),
-                price=payment_data.get("price", 0)
-            )
-        ))
+        # If payment_data is empty dict, return empty payment
+        if not payment_data or (isinstance(payment_data, dict) and not payment_data):
+            result.append(RentalResponse(
+                rental_uid=rental["rentalUid"],
+                status=rental["status"],
+                date_from=rental["dateFrom"],
+                date_to=rental["dateTo"],
+                car=CarInfo(
+                    car_uid=car_data.get("carUid", rental["carUid"]),
+                    brand=car_data.get("brand", ""),
+                    model=car_data.get("model", ""),
+                    registration_number=car_data.get("registrationNumber", "")
+                ),
+                payment={}
+            ))
+        else:
+            result.append(RentalResponse(
+                rental_uid=rental["rentalUid"],
+                status=rental["status"],
+                date_from=rental["dateFrom"],
+                date_to=rental["dateTo"],
+                car=CarInfo(
+                    car_uid=car_data.get("carUid", rental["carUid"]),
+                    brand=car_data.get("brand", ""),
+                    model=car_data.get("model", ""),
+                    registration_number=car_data.get("registrationNumber", "")
+                ),
+                payment=PaymentInfo(
+                    payment_uid=payment_data.get("paymentUid", rental["paymentUid"]),
+                    status=payment_data.get("status", "PAID"),
+                    price=payment_data.get("price", 0)
+                )
+            ))
 
     return result
 
@@ -377,6 +393,22 @@ async def get_rental(
     logger.info(f"Payment circuit breaker state: {payment_breaker.get_state()}")
     payment_data = await payment_breaker.call(fetch_payment, fallback=payment_fallback)
     logger.info(f"Received payment_data: {payment_data}")
+
+    # If payment_data is empty dict, return empty payment
+    if not payment_data or (isinstance(payment_data, dict) and not payment_data):
+        return RentalResponse(
+            rental_uid=rental["rentalUid"],
+            status=rental["status"],
+            date_from=rental["dateFrom"],
+            date_to=rental["dateTo"],
+            car=CarInfo(
+                car_uid=car_data.get("carUid", rental["carUid"]),
+                brand=car_data.get("brand", ""),
+                model=car_data.get("model", ""),
+                registration_number=car_data.get("registrationNumber", "")
+            ),
+            payment={}
+        )
 
     return RentalResponse(
         rental_uid=rental["rentalUid"],

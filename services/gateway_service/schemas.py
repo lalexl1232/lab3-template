@@ -52,7 +52,7 @@ class RentalResponse(BaseModel):
     date_from: str = Field(validation_alias="dateFrom", serialization_alias="dateFrom")
     date_to: str = Field(validation_alias="dateTo", serialization_alias="dateTo")
     car: CarInfo
-    payment: PaymentInfo
+    payment: Optional[PaymentInfo | dict] = None
 
     class Config:
         populate_by_name = True
