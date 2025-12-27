@@ -295,6 +295,9 @@ async def get_rental(
     rental_breaker = circuit_breaker_manager.get_breaker("rental_service")
     rental = await rental_breaker.call(fetch_rental)
 
+    # Flag to track if car service failed
+    car_fallback_used = {"value": False}
+
     # Get car info with fallback
     async def fetch_car():
         logger.info(f"Attempting to fetch car data for carUid: {rental['carUid']}")
@@ -317,6 +320,7 @@ async def get_rental(
             raise Exception(f"Failed to fetch car data: {car_response.status_code}")
 
     def car_fallback():
+        car_fallback_used["value"] = True
         logger.info(f"Car fallback called for rental carUid: {rental['carUid']}")
         logger.info(f"Current cache state: {car_info_cache}")
         # Try to get cached car info
@@ -343,11 +347,19 @@ async def get_rental(
             if payment_response.status_code == 200:
                 payment_data = payment_response.json()
                 logger.info(f"Payment data from service: {payment_data}")
+                # If Cars service failed AND rental is CANCELED AND payment is CANCELED, return empty payment
+                if car_fallback_used["value"] and rental.get("status") == "CANCELED" and payment_data.get("status") == "CANCELED":
+                    logger.info("Car fallback was used and rental/payment are CANCELED, returning empty payment")
+                    return {}
                 return payment_data
             return {}
 
     def payment_fallback():
         logger.info(f"Payment fallback called for paymentUid: {rental['paymentUid']}")
+        # If Cars service failed AND rental is CANCELED, return empty payment
+        if car_fallback_used["value"] and rental.get("status") == "CANCELED":
+            logger.info("Car fallback was used and rental is CANCELED, returning empty payment from fallback")
+            return {}
         return {"paymentUid": rental["paymentUid"], "status": "PAID", "price": 0}
 
     payment_breaker = circuit_breaker_manager.get_breaker("payment_service")
