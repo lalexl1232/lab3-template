@@ -89,6 +89,7 @@ class RetryQueue:
     async def stop(self):
         self.is_running = False
 
+
     def get_queue_status(self) -> dict:
         return {
             "queue_size": self.queue.qsize(),
