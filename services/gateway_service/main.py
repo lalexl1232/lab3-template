@@ -25,6 +25,7 @@ PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment:8050")
 
 circuit_breaker_manager = CircuitBreakerManager()
 
+
 # In-memory cache for car information
 # Key: carUid, Value: dict with car details
 car_info_cache = {}
